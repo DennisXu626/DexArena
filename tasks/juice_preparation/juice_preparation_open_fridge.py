@@ -82,7 +82,7 @@ from tasks.config.layout_randomization import ARM_INIT_QPOS_NOISE_STD, arm_qpos_
 from tasks.juice_preparation.juice_preparation_place_lid import sample_juice_layout
 from tasks.config.sim_profiles import make_sim_config
 from tasks.config.workspace_rig import apply_arm_init_qpos
-from tasks.juice_preparation.juice_preparation_place_lid import configure_task_object_physics
+from tasks.juice_preparation.juice_preparation_place_lid import bind_loader_material, configure_task_object_physics
 from tasks.juice_preparation.juice_preparation_apple_to_blender import FRIDGE_ROOT_P, ROBOT_ROOT_P
 from tasks.config.workspace_rig import (
     WORK_TABLE_X_OFFSET,
@@ -860,6 +860,7 @@ class JuicePreparationOpenFridgeEnv(BaseEnv):
         loader.fix_root_link = True
         loader.scale = 1.0
         loader.load_multiple_collisions_from_file = True
+        bind_loader_material(loader, "hard_plastic")
 
         parsed = loader.parse(str(self.fridge_urdf_path))
         builders = parsed["articulation_builders"]
@@ -874,7 +875,7 @@ class JuicePreparationOpenFridgeEnv(BaseEnv):
         builder.initial_pose = sapien.Pose(p=CUSTOM_FRIDGE_ROOT_POS.tolist())
 
         self.fridge = builder.build(name="custom_tabletop_mini_fridge")
-        configure_task_object_physics(self.fridge, "hard_plastic")
+        configure_task_object_physics(self.fridge, "hard_plastic", bind_material=False)
         # Minimal exact geometry for the vendored custom URDF. The legacy
         # PartNet extractor below is retained only for old scripted-policy
         # compatibility and does not match this asset's link naming.

@@ -34,22 +34,106 @@ _GPU_STAGE_BODY_WEIGHT = (
     "(steps, success verdicts, first divergence, final error) before and after, 400/400."
 )
 
+_CREATION_TIME_MATERIALS = (
+    "Contact materials of the articulated task objects (package carton, office "
+    "laptop/mouse/keyboard, threaded nut, screw bottle and cap, lunch box, refrigerator, "
+    "blender) are bound while the URDF loader or articulation builder creates the collision "
+    "shapes instead of being assigned to the built links with set_physical_material. Same "
+    "material objects and values; the per-shape material read-back is identical before and "
+    "after (10 environments). On physx_cuda a material assigned to articulation links after the "
+    "build leaves their contacts without friction (the PackageOpening apple glided over the "
+    "carton floor at a constant 3.9 cm/s and bounced off the walls; with the material bound at "
+    "creation it rests and a 5 cm/s kick stops within one control step). The CPU pipeline is "
+    "unchanged: headless_drive_all through the real teleop entry point with a fixed seed "
+    "recorded byte-identical episode.npz, raw_states.pkl and env_states.pkl before and after "
+    "for all 26 affected environments (78/78 files), and a same-tree repeat is identical "
+    "(determinism control)."
+)
+
 #: env_id -> ((old_fingerprint, new_fingerprint, evidence), ...), 12-hex prefixes.
 LINEAGE: Mapping[str, Sequence[tuple[str, str, str]]] = {
     "CabinetPouringLong-Sharpa-v1": (
         ("75ebc737dcbb", "48d4ba761ad7", _GPU_STAGE_BODY_WEIGHT),
+        ("48d4ba761ad7", "2fbe02e661cf", _CREATION_TIME_MATERIALS),
     ),
     "CabinetPouringOpenCabinet-Sharpa-v1": (
         ("2accab13a715", "141205a29a6e", _GPU_STAGE_BODY_WEIGHT),
+        ("141205a29a6e", "b32a7a3c13a7", _CREATION_TIME_MATERIALS),
     ),
     "CabinetPouringPickBottle-Sharpa-v1": (
         ("8a4a1e792709", "a7853bbc4f11", _GPU_STAGE_BODY_WEIGHT),
+        ("a7853bbc4f11", "125a59a94882", _CREATION_TIME_MATERIALS),
     ),
     "CabinetPouringPourBeads-Sharpa-v1": (
         ("5071b207bc01", "b2122d450589", _GPU_STAGE_BODY_WEIGHT),
+        ("b2122d450589", "761222b38034", _CREATION_TIME_MATERIALS),
     ),
     "CabinetPouringUnscrewCap-Sharpa-v1": (
         ("827f7215c131", "e7828140b26f", _GPU_STAGE_BODY_WEIGHT),
+        ("e7828140b26f", "5518f071253a", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationAppleToBlender-Sharpa-v1": (
+        ("f6c8793af0a4", "9bb33af809a4", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationCloseFridge-Sharpa-v1": (
+        ("64a508d14927", "6c6b8be47e0d", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationLong-Sharpa-v1": (
+        ("d445da53c3aa", "1359e6532583", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationOpenFridge-Sharpa-v1": (
+        ("0e2b69ed8c51", "c67cda1745e5", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationPlaceLid-Sharpa-v1": (
+        ("301f35d6d888", "a1f9de628a13", _CREATION_TIME_MATERIALS),
+    ),
+    "JuicePreparationPressButton-Sharpa-v1": (
+        ("7338a38588f1", "4b5562e17e78", _CREATION_TIME_MATERIALS),
+    ),
+    "MealPreparationLong-Sharpa-v1": (
+        ("a07b43adca2f", "75bc7a38fe42", _CREATION_TIME_MATERIALS),
+    ),
+    "MealPreparationOpenLunchBox-Sharpa-v1": (
+        ("9a134a95c95e", "131de364f39c", _CREATION_TIME_MATERIALS),
+    ),
+    "MealPreparationPlaceBread-Sharpa-v1": (
+        ("f787f71f6728", "aa8ccfe0b596", _CREATION_TIME_MATERIALS),
+    ),
+    "MealPreparationScoopTomato-Sharpa-v1": (
+        ("e3d73d3a6179", "3599f2537443", _CREATION_TIME_MATERIALS),
+    ),
+    "NutBoltLong-Sharpa-v1": (
+        ("0659e8c9e44e", "f83dd301400e", _CREATION_TIME_MATERIALS),
+    ),
+    "NutBoltPickBolt-Sharpa-v1": (
+        ("d9f90cf86685", "8796da5e4b50", _CREATION_TIME_MATERIALS),
+    ),
+    "NutBoltSeatNut-Sharpa-v1": (
+        ("9cbaf3acf05a", "1112e0ebe501", _CREATION_TIME_MATERIALS),
+    ),
+    "NutBoltTurnNut-Sharpa-v1": (
+        ("1307e90d9776", "be26aa60a9cb", _CREATION_TIME_MATERIALS),
+    ),
+    "OfficeDeskClickMouse-Sharpa-v1": (
+        ("2160f6292a77", "7fbc174297d7", _CREATION_TIME_MATERIALS),
+    ),
+    "OfficeDeskLong-Sharpa-v1": (
+        ("2c339f94c682", "fbc516728c2c", _CREATION_TIME_MATERIALS),
+    ),
+    "OfficeDeskOpenLaptop-Sharpa-v1": (
+        ("6d55b5401baf", "e759b2ecdbbc", _CREATION_TIME_MATERIALS),
+    ),
+    "OfficeDeskTypeKeys-Sharpa-v1": (
+        ("788afde2f712", "02bda1de2870", _CREATION_TIME_MATERIALS),
+    ),
+    "PackageOpeningExtractApple-Sharpa-v1": (
+        ("bd112c9cd4c6", "6527e485dcaa", _CREATION_TIME_MATERIALS),
+    ),
+    "PackageOpeningLong-Sharpa-v1": (
+        ("b7b50ebdeb3e", "a22acc10e678", _CREATION_TIME_MATERIALS),
+    ),
+    "PackageOpeningOpenPackage-Sharpa-v1": (
+        ("9f5110b2e174", "2e0ac84514f1", _CREATION_TIME_MATERIALS),
     ),
 }
 

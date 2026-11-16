@@ -722,6 +722,15 @@ class NutBoltLongEnv(BaseEnv):
         """Prebuild the pure-revolute representation; never change topology later."""
         loader = self.scene.create_urdf_loader()
         loader.fix_root_link = True
+        # Bind the nut material while the loader creates the shapes: assigning
+        # it to the articulation links after the build leaves the GPU
+        # (physx_cuda) contact pipeline without friction for those shapes.
+        nut_material = object_material("metal")
+        loader.set_material(
+            float(nut_material.static_friction),
+            float(nut_material.dynamic_friction),
+            float(nut_material.restitution),
+        )
         builders = loader.parse(str(self._generate_threaded_nut_urdf()))[
             "articulation_builders"
         ]
@@ -741,13 +750,11 @@ class NutBoltLongEnv(BaseEnv):
             )
             joint.set_drive_velocity_target(0.0)
 
-        material = object_material("metal")
+        # The nut material is bound by the URDF loader (see _load_threaded_nut).
         for link in self.nut_revolute.get_links():
             for component in link._objs:
                 component.set_max_depenetration_velocity(0.5)
                 component.set_max_linear_velocity(3.0)
-                for shape in component.get_collision_shapes():
-                    shape.set_physical_material(material)
         self.threaded_nut.set_collision_group_bit(
             group=2, bit_idx=BOLT_THREADED_NUT_COLLISION_BIT, bit=1
         )

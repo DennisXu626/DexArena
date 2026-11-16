@@ -518,17 +518,26 @@ def apply_laptop_masses(articulation) -> None:
                 )
 
 
-def _configure_task_articulation(articulation) -> None:
-    """Apply the project object material and task-object energy fences."""
+def _bind_task_articulation_material(loader) -> None:
+    """Bind the project object material while the URDF loader creates the
+    collision shapes. Assigning the material to an articulation link's shapes
+    after the build leaves the GPU (physx_cuda) contact pipeline without
+    friction for those shapes; the CPU pipeline treats both paths the same."""
     material = object_material("hard_plastic")
+    loader.set_material(
+        float(material.static_friction),
+        float(material.dynamic_friction),
+        float(material.restitution),
+    )
+
+
+def _configure_task_articulation(articulation) -> None:
+    """Apply the task-object energy fences (the material is bound at load)."""
     for link in articulation.get_links():
         for component in link._objs:
             if hasattr(component, "set_max_depenetration_velocity"):
                 component.set_max_depenetration_velocity(0.5)
                 component.set_max_linear_velocity(3.0)
-            if hasattr(component, "get_collision_shapes"):
-                for shape in component.get_collision_shapes():
-                    shape.set_physical_material(material)
 
 
 
@@ -716,6 +725,7 @@ class OfficeDeskOpenLaptopEnv(BaseEnv):
             loader.fix_root_link = True
             loader.scale = float(cfg["scale"])
             loader.load_multiple_collisions_from_file = True
+            _bind_task_articulation_material(loader)
             # Model 10211 contains 82 collision meshes. Most cluster copies do
             # not ship all corresponding *.coacd.ply caches, and generating
             # them here serially can stall environment creation for hours.

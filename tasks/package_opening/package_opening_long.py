@@ -322,7 +322,7 @@ def _add_flap_tabs(builder, urdf_path: Path, scale: float) -> None:
 
 
 def _load_urdf(scene, path, scene_idx, name, scale, pose, fixed=True,
-               decomposition="none", flap_tabs=False):
+               decomposition="none", flap_tabs=False, material=None):
     """Load a PartNet URDF.
 
     ``decomposition="coacd"`` is required for any part with a HOLE through it.
@@ -344,6 +344,16 @@ def _load_urdf(scene, path, scene_idx, name, scale, pose, fixed=True,
     loader.multiple_collisions_decomposition = decomposition
     if decomposition == "coacd":
         loader.multiple_collisions_decomposition_params = dict(COACD_PARAMS)
+    if material is not None:
+        # Bind the contact material while the collision shapes are created.
+        # Re-assigning a material to an articulation link's shapes after the
+        # build leaves the GPU (physx_cuda) contact pipeline without friction
+        # for those shapes; the CPU pipeline honours both paths identically.
+        loader.set_material(
+            float(material.static_friction),
+            float(material.dynamic_friction),
+            float(material.restitution),
+        )
     builder = loader.parse(str(path))["articulation_builders"][0]
     if flap_tabs:
         _add_flap_tabs(builder, Path(path), scale)
@@ -523,12 +533,13 @@ def build_package_scene(env, config: PackageSceneConfig) -> SceneHandles:
     table = TableSceneBuilder(env=env)
     table.build()
     boxes, plates, apples = [], [], []
+    box_material = object_material("cardboard", dominant="table")
     for scene_idx in range(env.num_envs):
         if env.LOAD_PACKAGE:
             boxes.append(_load_urdf(
                 env.scene, PACKAGE_URDF_PATH, scene_idx, f"package_{scene_idx}",
                 config.box_scale, sapien.Pose(p=config.box_pos), fixed=True,
-                flap_tabs=True,
+                flap_tabs=True, material=box_material,
             ))
         if env.LOAD_PLATE:
             plates.append(_load_robocasa_actor(
@@ -560,11 +571,10 @@ def build_package_scene(env, config: PackageSceneConfig) -> SceneHandles:
     #       real ~0.50. The cost is a fingertip-flap pair of 0.95 vs a real
     #       0.55, i.e. the flaps are grippier than paper -- an "easier than
     #       real" gap, which is preferable to a "physically broken" one.
-    box_material = object_material("cardboard", dominant="table")
     apple_material = object_material("produce", dominant="pad")
     plate_material = object_material("ceramic", dominant="table")
     for box in boxes:
-        _apply_object_material(box, box_material)
+        # The carton material is bound by the URDF loader (see _load_urdf).
         _set_body_masses(box, {"0": PACKAGE_FLAP_MASS,
                                "1": PACKAGE_FLAP_MASS,
                                "2": PACKAGE_BODY_MASS})
