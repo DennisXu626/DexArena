@@ -85,6 +85,7 @@ from tasks.juice_preparation.juice_preparation_place_lid import (
     GLOBAL_SCALE,
     build_blender023,
     compute_blender_geometry,
+    bind_loader_material,
     configure_task_object_physics,
     prepare_mjcf,
 )
@@ -870,6 +871,7 @@ def load_custom_tabletop_fridge(
     loader.fix_root_link = True
     loader.scale = 1.0
     loader.load_multiple_collisions_from_file = True
+    bind_loader_material(loader, "hard_plastic")
 
     parsed = loader.parse(str(FRIDGE_URDF))
     builders = parsed["articulation_builders"]
@@ -885,7 +887,7 @@ def load_custom_tabletop_fridge(
     builder.initial_pose = pose
 
     fridge = builder.build(name=name)
-    configure_task_object_physics(fridge, "hard_plastic")
+    configure_task_object_physics(fridge, "hard_plastic", bind_material=False)
 
     door_joint = fridge.active_joints_map[
         DOOR_JOINT_NAME

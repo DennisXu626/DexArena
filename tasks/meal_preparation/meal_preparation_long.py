@@ -1237,20 +1237,31 @@ def _lid_link_names(obj) -> set:
     return names
 
 
-def _configure_task_object_physics(obj, material_kind: str):
-    """Apply the explicit material, mass and energy fences to a task object.
-
-    Nothing here may fall through to an engine default: the material class, the
-    dominant contact pair and the mass are all stated in the tables above.
-    """
+def _task_object_materials(material_kind: str, with_lid: bool):
+    """(base, lid) contact materials of a task object, from the frozen tables."""
     material_class = TASK_OBJECT_MATERIAL_CLASSES[material_kind]
-    lid_names = _lid_link_names(obj) if material_kind == "box" else set()
     base_material = object_material(
         material_class, dominant=TASK_OBJECT_DOMINANT_PAIR[material_kind]
     )
     lid_material = object_material(
         material_class, dominant=TASK_OBJECT_DOMINANT_PAIR["box_lid"]
-    ) if lid_names else base_material
+    ) if with_lid else base_material
+    return base_material, lid_material
+
+
+def _configure_task_object_physics(obj, material_kind: str, bind_material: bool = True):
+    """Apply the explicit material, mass and energy fences to a task object.
+
+    ``bind_material=False`` skips the material assignment for objects whose
+    material was already bound while their collision shapes were created
+    (articulations: assigning a material to a link's shapes after the build
+    leaves the GPU contact pipeline without friction for those shapes).
+
+    Nothing here may fall through to an engine default: the material class, the
+    dominant contact pair and the mass are all stated in the tables above.
+    """
+    lid_names = _lid_link_names(obj) if material_kind == "box" else set()
+    base_material, lid_material = _task_object_materials(material_kind, bool(lid_names))
     base_mass = TASK_OBJECT_MASS[material_kind]
     lid_mass = TASK_OBJECT_MASS["box_lid"]
     structs = obj.get_links() if isinstance(obj, Articulation) else (obj,)
@@ -1272,10 +1283,11 @@ def _configure_task_object_physics(obj, material_kind: str):
             # link carries the scene-prefixed one, so the two never compare
             # equal at the struct level.
             is_lid = str(getattr(raw, "name", "")) in lid_names
-            for shape in component.get_collision_shapes():
-                shape.set_physical_material(
-                    lid_material if is_lid else base_material
-                )
+            if bind_material:
+                for shape in component.get_collision_shapes():
+                    shape.set_physical_material(
+                        lid_material if is_lid else base_material
+                    )
             # Explicit mass. Without this the body keeps whatever the mesh
             # volume times the PhysX default density (1000 kg/m3) produced,
             # which gave a 13.45 kg meal box and a 1.5 kg spoon. Articulation
@@ -1294,13 +1306,19 @@ def _configure_task_object_physics(obj, material_kind: str):
 
 
 def _build_procedural_lidded_box(
-    scene, scene_idxs, name, visual_urdf_path: Path | None = None, initial_pose=None
+    scene, scene_idxs, name, visual_urdf_path: Path | None = None, initial_pose=None,
+    base_material=None, lid_material=None,
 ):
     builder = scene.create_articulation_builder()
     builder.set_scene_idxs(scene_idxs)
     if initial_pose is not None:
         builder.initial_pose = initial_pose
+    # Contact materials are bound while the collision records are created:
+    # assigning them to articulation links after the build leaves the GPU
+    # (physx_cuda) contact pipeline without friction for those shapes.
     phys_mat = physx.PhysxMaterial(1.0, 0.8, 0.0)
+    base_mat = base_material if base_material is not None else phys_mat
+    lid_mat_phys = lid_material if lid_material is not None else phys_mat
 
     base = builder.create_link_builder(parent=None)
     base.set_name("box_base")
@@ -1315,7 +1333,7 @@ def _build_procedural_lidded_box(
         (sapien.Pose([box_lx / 2, 0, box_lz / 2]), [wall / 2, box_ly / 2, box_lz / 2]),
         (sapien.Pose([-box_lx / 2, 0, box_lz / 2]), [wall / 2, box_ly / 2, box_lz / 2]),
     ]:
-        base.add_box_collision(pose=pose, half_size=half_size, material=phys_mat)
+        base.add_box_collision(pose=pose, half_size=half_size, material=base_mat)
         base.add_box_visual(pose=pose, half_size=half_size, material=bottom_mat)
     base.add_box_collision(
         pose=sapien.Pose([0, 0, wall + PROCEDURAL_BOX_APPLE_SUPPORT_THICKNESS / 2]),
@@ -1324,7 +1342,7 @@ def _build_procedural_lidded_box(
             box_ly / 2 - wall,
             PROCEDURAL_BOX_APPLE_SUPPORT_THICKNESS / 2,
         ],
-        material=phys_mat,
+        material=base_mat,
     )
     base.add_box_visual(
         pose=sapien.Pose([0, 0, wall + PROCEDURAL_BOX_APPLE_SUPPORT_THICKNESS / 2]),
@@ -1371,7 +1389,7 @@ def _build_procedural_lidded_box(
     lid.add_box_collision(
         pose=lower_pose,
         half_size=lower_half_size,
-        material=phys_mat,
+        material=lid_mat_phys,
         density=PROCEDURAL_BOX_LID_DENSITY,
     )
     lid.add_box_visual(
@@ -1380,7 +1398,7 @@ def _build_procedural_lidded_box(
     lid.add_box_collision(
         pose=upper_pose,
         half_size=upper_half_size,
-        material=phys_mat,
+        material=lid_mat_phys,
         density=PROCEDURAL_BOX_LID_DENSITY,
     )
     lid.add_box_visual(
@@ -1405,7 +1423,7 @@ def _build_procedural_lidded_box(
     knuckle_mat = _make_material([0.45, 0.45, 0.47, 1.0])
     lid.add_cylinder_collision(
         pose=sapien.Pose([0.0, 0.0, 0.0]), radius=knuckle_r, half_length=box_lx / 2,
-        material=phys_mat, density=PROCEDURAL_BOX_LID_DENSITY,
+        material=lid_mat_phys, density=PROCEDURAL_BOX_LID_DENSITY,
     )
     lid.add_cylinder_visual(
         pose=sapien.Pose([0.0, 0.0, 0.0]), radius=knuckle_r, half_length=box_lx / 2, material=knuckle_mat
@@ -1415,7 +1433,7 @@ def _build_procedural_lidded_box(
     leaf_top = hinge_z - knuckle_r - 0.0015          # 1.5 mm under the knuckle
     leaf_half = [box_lx / 2, leaf_t / 2, (leaf_top - box_lz) / 2]
     leaf_pose = sapien.Pose([0.0, leaf_y0 + leaf_t / 2, (leaf_top + box_lz) / 2])
-    base.add_box_collision(pose=leaf_pose, half_size=leaf_half, material=phys_mat)
+    base.add_box_collision(pose=leaf_pose, half_size=leaf_half, material=base_mat)
     # The VISUAL leaf continues up to the axis height (its top disappears inside
     # the knuckle), so the 1.5 mm running clearance under the knuckle is not a
     # visible slit. Collision stays at leaf_top: the lid never reaches below the
@@ -1700,6 +1718,7 @@ class MealPreparationBase(BaseEnv):
             self.box_bottom_top_z = (
                 PROCEDURAL_BOX_WALL + PROCEDURAL_BOX_APPLE_SUPPORT_THICKNESS
             )
+        box_base_material, box_lid_material = _task_object_materials("box", True)
         for i in range(self.num_envs):
             scene_idxs = [i]
             box_pose = self.box_pose_xyz.clone()
@@ -1717,6 +1736,14 @@ class MealPreparationBase(BaseEnv):
                 loader.scale = PARTNET_BOX_SCALE
                 loader.load_multiple_collisions_from_file = True
                 builder = loader.parse(str(urdf_path))["articulation_builders"][0]
+                # Bind the box materials on the parsed collision records: the
+                # lid is every link hung on a movable joint, as in
+                # _lid_link_names after the build.
+                for link_builder in builder.link_builders:
+                    joint_type = str(getattr(link_builder.joint_record, "joint_type", "fixed"))
+                    is_lid = link_builder.parent is not None and joint_type not in ("fixed", "undefined")
+                    for record in link_builder.collision_records:
+                        record.material = box_lid_material if is_lid else box_base_material
                 builder.set_scene_idxs(scene_idxs)
                 builder.initial_pose = sapien.Pose(box_pose.tolist())
                 box = builder.build(name=f"partnet_box_{i}", fix_root_link=True)
@@ -1735,6 +1762,8 @@ class MealPreparationBase(BaseEnv):
                     f"procedural_box_{i}",
                     visual_urdf_path=visual_urdf_path,
                     initial_pose=sapien.Pose(box_pose.tolist()),
+                    base_material=box_base_material,
+                    lid_material=box_lid_material,
                 )
                 self.loaded_box_asset_source = "hybrid" if visual_urdf_path is not None else "procedural"
                 if visual_urdf_path is not None:
@@ -1752,7 +1781,7 @@ class MealPreparationBase(BaseEnv):
         # drawer_plug.py / office_laptop.py; valid here because every per-scene
         # box comes from the same asset and therefore has the same link count.
         self.box = Articulation.merge(box_articulations, "meal_box", merge_links=True)
-        _configure_task_object_physics(self.box, "box")
+        _configure_task_object_physics(self.box, "box", bind_material=False)
         self._configure_box_lid_drives()
         if self.loaded_box_asset_source == "procedural":
             print(

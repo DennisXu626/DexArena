@@ -1105,6 +1105,20 @@ class CabinetPouringLongEnv(BaseEnv):
             or self.cap_contact_fixed_root
         )
         loader.load_multiple_collisions_from_file = True
+        # Bind the bottle and cap materials while the loader creates the
+        # shapes: assigning them to the articulation links after the build
+        # leaves the GPU (physx_cuda) contact pipeline without friction for
+        # those shapes; the CPU pipeline treats both paths the same.
+        for link_name, link_material in (
+            ("source_container", bottle_material),
+            ("source_cap", cap_material),
+        ):
+            loader.set_link_material(
+                link_name,
+                float(link_material.static_friction),
+                float(link_material.dynamic_friction),
+                float(link_material.restitution),
+            )
         builders = loader.parse(str(urdf_path))["articulation_builders"]
         if len(builders) != 1:
             raise RuntimeError("Expected one bottle_screw articulation")
@@ -1157,12 +1171,7 @@ class CabinetPouringLongEnv(BaseEnv):
         # Contact materials (the loader default would be the 0.3 fallback).
         # Bottle remains frozen at hard-plastic 0.8; only cap representations
         # receive the optional task-object A/B coefficient.
-        for raw in self.source._objs:
-            for sh in self._raw_collision_component(raw).get_collision_shapes():
-                sh.set_physical_material(bottle_material)
-        for raw in self.cap._objs:
-            for sh in self._raw_collision_component(raw).get_collision_shapes():
-                sh.set_physical_material(cap_material)
+        # Bottle and cap materials are bound by the URDF loader above.
         # The attached cap seals the particle proxy. The free twin deliberately
         # stays on default [1, 1], so once removed it cannot inject hard-body
         # impulses into the liquid through a penetrating fingertip contact.
@@ -1248,6 +1257,20 @@ class CabinetPouringLongEnv(BaseEnv):
         loader.name = "bottle_screw_fixed"
         loader.fix_root_link = True
         loader.load_multiple_collisions_from_file = True
+        # Bind the bottle and cap materials while the loader creates the
+        # shapes: assigning them to the articulation links after the build
+        # leaves the GPU (physx_cuda) contact pipeline without friction for
+        # those shapes; the CPU pipeline treats both paths the same.
+        for link_name, link_material in (
+            ("source_container", bottle_material),
+            ("source_cap", cap_material),
+        ):
+            loader.set_link_material(
+                link_name,
+                float(link_material.static_friction),
+                float(link_material.dynamic_friction),
+                float(link_material.restitution),
+            )
         builders = loader.parse(str(urdf_path))["articulation_builders"]
         if len(builders) != 1:
             raise RuntimeError("Expected one fixed bottle_screw articulation")
@@ -1276,12 +1299,7 @@ class CabinetPouringLongEnv(BaseEnv):
                     )
                 raw.set_armature([self.cap_joint_armature])
 
-        for raw in self.source_fixed._objs:
-            for shape in self._raw_collision_component(raw).get_collision_shapes():
-                shape.set_physical_material(bottle_material)
-        for raw in self.cap_fixed._objs:
-            for shape in self._raw_collision_component(raw).get_collision_shapes():
-                shape.set_physical_material(cap_material)
+        # Bottle and cap materials are bound by the URDF loader above.
         for shape in self.cap_fixed._objs[0].get_collision_shapes():
             groups = list(shape.get_collision_groups())
             groups[1] |= PARTICLE_CONTACT_CATEGORY

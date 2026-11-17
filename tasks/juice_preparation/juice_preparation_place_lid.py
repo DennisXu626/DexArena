@@ -840,9 +840,10 @@ def build_blender023(
         builder.disable_self_collisions = True
         if hasattr(builder, "set_name"):
             builder.set_name(name)
+        bind_builder_material(builder, "hard_plastic")
         blender = builder.build()
         template.articulation = blender
-        configure_task_object_physics(blender, "hard_plastic")
+        configure_task_object_physics(blender, "hard_plastic", bind_material=False)
         configure_blender_bodies(blender)
         return blender, template, True
 
@@ -908,10 +909,41 @@ def build_blender_lid(
     return lid, template
 
 
+def bind_loader_material(loader, material_class: str, restitution: float = 0.0):
+    """Bind a project material while a URDF loader creates the collision shapes.
+
+    Articulation links must get their material here: assigning it to the
+    link shapes after the build leaves the GPU (physx_cuda) contact pipeline
+    without friction for those shapes, while the CPU pipeline treats both
+    paths the same. Returns the material for record keeping.
+    """
+    material = object_material(material_class, restitution=restitution)
+    loader.set_material(
+        float(material.static_friction),
+        float(material.dynamic_friction),
+        float(material.restitution),
+    )
+    return material
+
+
+def bind_builder_material(builder, material_class: str, restitution: float = 0.0):
+    """Bind a project material on every collision record of an articulation
+    builder before ``build()`` (same reason as ``bind_loader_material``)."""
+    material = object_material(material_class, restitution=restitution)
+    for link_builder in builder.link_builders:
+        for record in link_builder.collision_records:
+            record.material = material
+    return material
+
+
 def configure_task_object_physics(
-    task_object, material_class: str, restitution: float = 0.0
+    task_object, material_class: str, restitution: float = 0.0,
+    bind_material: bool = True,
 ) -> None:
     """Apply the project material lookup and task-object energy fence.
+
+    ``bind_material=False`` keeps the material that was bound while the
+    collision shapes were created (see ``bind_loader_material``).
 
     This deliberately touches task objects only. Robot, arm, hand, table, and
     global solver parameters remain owned by their respective frozen layers.
@@ -937,8 +969,9 @@ def configure_task_object_physics(
                         break
             if component is None:
                 continue
-            for shape in component.get_collision_shapes():
-                shape.set_physical_material(material)
+            if bind_material:
+                for shape in component.get_collision_shapes():
+                    shape.set_physical_material(material)
             if hasattr(component, "set_max_depenetration_velocity"):
                 component.set_max_depenetration_velocity(0.5)
                 component.set_max_linear_velocity(3.0)
