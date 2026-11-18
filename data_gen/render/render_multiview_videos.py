@@ -34,6 +34,15 @@ USAGE
     $P -m data_gen.render.render_multiview_videos --only OfficeDeskClickMouse-Sharpa-v1 --episodes 2 \
         --out-root /tmp/render_trial --apply                            # trial: 2 episodes
     $P -m data_gen.render.render_multiview_videos --jobs 3 --apply     # every release subset
+    $P -m data_gen.render.render_multiview_videos --only OfficeDeskTypeKeys-Sharpa-v1 \
+        --base-res 1024 --wrist-res 1024 --supersample 2 \
+        --out-root data/teleop_lerobot_100_video_hd/sharpa --apply       # high-resolution tier
+
+RESOLUTION TIERS
+    --base-res / --wrist-res set the video size per camera (default: the rig's 256 x 256);
+    --supersample K renders every camera at K times that size and averages K x K pixel
+    blocks down, which removes the aliasing of the point-sampled render. The tier is
+    recorded under ``rig.resolution`` in meta/video_manifest.json and the certificate.
 """
 from __future__ import annotations
 
@@ -74,7 +83,7 @@ def ordered_sidecars(dataset: pathlib.Path) -> list[pathlib.Path]:
     return sidecars_in_episode_order(dataset)
 
 
-def _build_env(identity: dict, family: str, markers_off: bool):
+def _build_env(identity: dict, family: str, markers_off: bool, resolution=None):
     from mani_skill.utils.registration import REGISTERED_ENVS
 
     from data_gen.render import camera_rigs as RIG
@@ -91,7 +100,7 @@ def _build_env(identity: dict, family: str, markers_off: bool):
         kwargs[GUIDANCE_MARKER_KWARG] = False
     identity["env_kwargs"] = json.dumps(kwargs)
 
-    RIG.install_rig(REGISTERED_ENVS[str(identity["env_id"])].cls, family)
+    RIG.install_rig(REGISTERED_ENVS[str(identity["env_id"])].cls, family, resolution)
     try:
         return RR._make_env(identity), markers_off
     except TypeError as exc:
@@ -117,7 +126,7 @@ def _actor_names(env) -> set[str]:
     return names
 
 
-def make_env(identity: dict, family: str, recorded_actors: set[str] = frozenset()):
+def make_env(identity: dict, family: str, recorded_actors: set[str] = frozenset(), resolution=None):
     """The recording environment, with the family rig as its human render cameras and
     the guidance markers out of the picture.
 
@@ -128,14 +137,14 @@ def make_env(identity: dict, family: str, recorded_actors: set[str] = frozenset(
     markers-on env is used and exactly those actors' visuals are hidden. Markers that
     are not in the recorded state (screwing `bolt_placement_region`) simply stay unbuilt.
     """
-    env_off, markers_off = _build_env(identity, family, markers_off=True)
+    env_off, markers_off = _build_env(identity, family, markers_off=True, resolution=resolution)
     if not markers_off:
         return env_off, False, []
     missing = sorted(set(recorded_actors) - _actor_names(env_off))
     if not missing:
         return env_off, True, []
     env_off.close()
-    env_on, _ = _build_env(identity, family, markers_off=False)
+    env_on, _ = _build_env(identity, family, markers_off=False, resolution=resolution)
     still_missing = sorted(set(missing) - _actor_names(env_on))
     if still_missing:
         raise RuntimeError(f"recorded state has actors this environment cannot build: {still_missing}")
@@ -161,9 +170,53 @@ def hide_markers(base, hidden: list[str]) -> None:
                     body.visibility = 0.0
 
 
-def capture(base, camera_names: list[str]) -> dict[str, np.ndarray]:
-    """One uint8 (H,W,3) frame per rig camera from the current scene state.
-    Hidden objects stay hidden: the videos carry sensor semantics, not the viewer's."""
+def _rgb_tensor(image):
+    """The renderer's image as an (H,W,3) uint8 torch tensor on its own device, or None.
+    Same accepted layouts as replay_recording.to_numpy_rgb_image."""
+    import torch
+
+    if isinstance(image, dict):
+        for key in ("rgb", "Color", "color", "image"):
+            if key in image:
+                return _rgb_tensor(image[key])
+        return None
+    if not torch.is_tensor(image):
+        return None
+    if image.ndim == 4 and image.shape[0] == 1:
+        image = image[0]
+    if image.ndim != 3 or image.shape[-1] < 3:
+        return None
+    image = image[..., :3]
+    if image.dtype != torch.uint8:
+        if image.is_floating_point() and image.numel() and float(image.max()) <= 1.0:
+            image = image * 255.0
+        image = image.clamp(0, 255).to(torch.uint8)
+    return image
+
+
+def downsample_area(frame, k: int) -> np.ndarray:
+    """Average every k x k block of an (H,W,3) uint8 frame (numpy or torch, any device) and
+    return uint8 numpy; H and W must be multiples of k. Block means of uint8 values are
+    exact in float32, so the result does not depend on the device."""
+    import torch
+
+    if k <= 1:
+        return frame.cpu().numpy() if torch.is_tensor(frame) else frame
+    h, w, c = frame.shape
+    if h % k or w % k:
+        raise ValueError(f"frame {h}x{w} is not a multiple of the supersample factor {k}")
+    if torch.is_tensor(frame):
+        blocks = frame.reshape(h // k, k, w // k, k, c).to(torch.float32).mean(dim=(1, 3))
+        return torch.floor(blocks + 0.5).to(torch.uint8).cpu().numpy()
+    blocks = frame.reshape(h // k, k, w // k, k, c).astype(np.float32).mean(axis=(1, 3))
+    return np.floor(blocks + 0.5).astype(np.uint8)
+
+
+def capture(base, camera_names: list[str], supersample: int = 1) -> dict[str, np.ndarray]:
+    """One uint8 (H,W,3) frame per rig camera from the current scene state, box-filtered
+    down by ``supersample`` (on the renderer's device) when the rig renders above the
+    output size. Hidden objects stay hidden: the videos carry sensor semantics, not the
+    viewer's."""
     from data_gen.recordings.replay_recording import to_numpy_rgb_image
 
     base.scene.update_render(update_sensors=False, update_human_render_cameras=True)
@@ -172,14 +225,15 @@ def capture(base, camera_names: list[str]) -> dict[str, np.ndarray]:
         raise RuntimeError(f"human render cameras returned {type(images).__name__}, expected dict")
     out = {}
     for name in camera_names:
-        frame = to_numpy_rgb_image(images.get(name))
+        tensor = _rgb_tensor(images.get(name))
+        frame = downsample_area(tensor, supersample) if tensor is not None else to_numpy_rgb_image(images.get(name))
         if frame is None:
             raise RuntimeError(f"camera {name!r} produced no RGB image (got {sorted(images)})")
-        out[name] = frame
+        out[name] = downsample_area(frame, supersample) if tensor is None else frame
     return out
 
 
-def seed_dependence(env, camera_names, raw_states, seed: int, hidden_markers=()) -> dict:
+def seed_dependence(env, camera_names, raw_states, seed: int, hidden_markers=(), supersample: int = 1) -> dict:
     """Does anything VISIBLE depend on the reset seed beyond the restored state?
 
     Two frames of one episode, each rendered after reset(recorded seed)+restore and after
@@ -199,7 +253,7 @@ def seed_dependence(env, camera_names, raw_states, seed: int, hidden_markers=())
             env.reset(seed=int(s))
             hide_markers(base, hidden_markers)
             RR._set_raw_state(env, raw_states[t])
-            renders.append(capture(base, camera_names))
+            renders.append(capture(base, camera_names, supersample))
         out[str(t)] = {name: {"other_seed_px": int(np.any(renders[0][name] != renders[1][name], axis=-1).sum()),
                               "same_seed_px": int(np.any(renders[0][name] != renders[2][name], axis=-1).sum())}
                        for name in camera_names}
@@ -219,7 +273,7 @@ def _count_reconfigures(base) -> list[int]:
 
 
 def render_episode(env, counter, camera_names, episode_full, episode, seed, tmp_dir, index,
-                   determinism_frames, rng, hidden_markers=()) -> tuple[dict[str, np.ndarray], dict]:
+                   determinism_frames, rng, hidden_markers=(), supersample: int = 1) -> tuple[dict[str, np.ndarray], dict]:
     from data_gen.recordings import replay_recording as RR
 
     base = env.unwrapped
@@ -235,9 +289,9 @@ def render_episode(env, counter, camera_names, episode_full, episode, seed, tmp_
     env.reset(seed=int(seed))
     hide_markers(base, hidden_markers)
     reconfigures_at_reset = counter[0] - before
-    after_reset = capture(base, camera_names)
+    after_reset = capture(base, camera_names, supersample)
     RR._set_raw_state(env, raw_full[0])
-    restored_start = capture(base, camera_names)
+    restored_start = capture(base, camera_names, supersample)
     seed_px_diff = {name: int(np.any(after_reset[name] != restored_start[name], axis=-1).sum())
                     for name in camera_names}
 
@@ -249,7 +303,7 @@ def render_episode(env, counter, camera_names, episode_full, episode, seed, tmp_
     started = time.time()
     for t in range(frames_expected):
         RR._set_raw_state(env, raw[t])
-        images = capture(base, camera_names)
+        images = capture(base, camera_names, supersample)
         for name in camera_names:
             frames[name][t] = images[name]
     render_seconds = time.time() - started
@@ -263,7 +317,7 @@ def render_episode(env, counter, camera_names, episode_full, episode, seed, tmp_
         hide_markers(base, hidden_markers)
         for t in sample:
             RR._set_raw_state(env, raw[t])
-            images = capture(base, camera_names)
+            images = capture(base, camera_names, supersample)
             for name in camera_names:
                 if not np.array_equal(images[name], frames[name][t]):
                     mismatches.append([t, name, int(np.any(images[name] != frames[name][t], axis=-1).sum())])
@@ -308,7 +362,7 @@ def contact_sheet(frames: dict[str, np.ndarray], path: pathlib.Path) -> None:
 
 # --------------------------------------------------------------------------- one dataset
 def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: int,
-                   determinism_frames: int) -> dict:
+                   determinism_frames: int, resolution=None) -> dict:
     from data_gen.render import camera_rigs as RIG
     from data_gen.recordings.dataset_layout import dataset_root
     from data_gen.recordings.episode_store import load_pending_episode, restore_seed
@@ -334,6 +388,7 @@ def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: 
     tmp_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
     env = None
+    supersample = int(resolution.supersample) if resolution is not None else 1
     started = time.time()
     try:
         episodes, records, sheet_frames = [], [], None
@@ -343,7 +398,7 @@ def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: 
             if env is None:
                 recorded_actors = set((full["raw_state_sequence"] or [{}])[0].get("actors", {}))
                 env, markers_off, hidden_markers = make_env(full["meta"]["identity_manifest"], family,
-                                                            recorded_actors)
+                                                            recorded_actors, resolution)
                 base = env.unwrapped
                 counter = _count_reconfigures(base)
                 camera_names = RIG.rig_camera_names(base)
@@ -353,11 +408,12 @@ def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: 
             if seed is None:
                 raise RuntimeError(f"{sidecar.name}: no seed to reset with")
             if index == 0:
-                seed_probe = seed_dependence(env, camera_names, episode["raw_state_sequence"], int(seed), hidden_markers)
+                seed_probe = seed_dependence(env, camera_names, episode["raw_state_sequence"], int(seed), hidden_markers,
+                                             supersample)
                 depends = any(v["other_seed_px"] for t in seed_probe.values() for v in t.values())
                 print(f"  [{dataset.name}] visuals depend on the reset seed: {depends} {seed_probe}", flush=True)
             paths, record = render_episode(env, counter, camera_names, full, episode, seed, tmp_dir, index,
-                                           determinism_frames, rng, hidden_markers)
+                                           determinism_frames, rng, hidden_markers, supersample)
             images = {IMAGE_KEY_PREFIX + name: np.load(path, mmap_mode="r") for name, path in paths.items()}
             if sheet_frames is None:
                 sheet_frames = {name: np.load(path, mmap_mode="r") for name, path in paths.items()}
@@ -443,13 +499,13 @@ def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: 
             "render_seconds": round(render_seconds, 1),
             "export_seconds": round(export_seconds, 1),
         }
-        manifest = {"rig": RIG.describe(family), **summary, "episodes_detail": records}
+        manifest = {"rig": RIG.describe(family, resolution=resolution), **summary, "episodes_detail": records}
         (out / "meta" / "video_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
         certificate = json.loads(certificate_path(out).read_text(encoding="utf-8"))
         diagnostics = dict(certificate.get("diagnostics") or {})
-        diagnostics["video"] = {"rig": RIG.describe(family), **summary}
+        diagnostics["video"] = {"rig": RIG.describe(family, resolution=resolution), **summary}
         write_certificate(out, status=certificate["status"], source_hashes=certificate["source_hashes"],
                           diagnostics=diagnostics)
         assert_valid_certificate(out)
@@ -462,7 +518,7 @@ def render_dataset(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: 
 
 # --------------------------------------------------------------------------- driver
 def _worker(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: int, determinism_frames: int,
-            timeout: int) -> dict:
+            timeout: int, resolution_args: list[str] = ()) -> dict:
     """One dataset in a subprocess with its own TMPDIR (the patched-MJCF cache is per asset
     and rebuilt with rmtree, so two processes of one env in one /tmp delete each other)."""
     env = dict(os.environ)
@@ -477,7 +533,8 @@ def _worker(dataset: pathlib.Path, out_root: pathlib.Path, max_episodes: int, de
             proc = subprocess.run(
                 [sys.executable, "-m", "data_gen.render.render_multiview_videos", "--dataset", str(dataset),
                  "--out-root", str(out_root), "--episodes", str(max_episodes),
-                 "--determinism-frames", str(determinism_frames), "--apply", "--json-out", str(result_path)],
+                 "--determinism-frames", str(determinism_frames), "--apply", "--json-out", str(result_path),
+                 *resolution_args],
                 cwd=str(REPO_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
         if proc.returncode != 0 or not result_path.exists():
             tail = "".join(open(log_path).readlines()[-15:])
@@ -498,6 +555,9 @@ def main() -> int:
     ap.add_argument("--determinism-frames", type=int, default=3, help="frames per episode re-rendered for the determinism check")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=6 * 3600, help="time limit in seconds for each dataset subprocess")
+    ap.add_argument("--base-res", type=int, default=0, help="base camera video size in pixels (square); 0 = rig default")
+    ap.add_argument("--wrist-res", type=int, default=0, help="wrist camera video size in pixels (square); 0 = rig default")
+    ap.add_argument("--supersample", type=int, default=1, help="render at K times the video size and average K x K blocks")
     ap.add_argument("--apply", action="store_true", help="render and export; default is a dry run that prints the plan")
     ap.add_argument("--dataset", type=pathlib.Path, help=argparse.SUPPRESS)
     ap.add_argument("--json-out", type=pathlib.Path, help=argparse.SUPPRESS)
@@ -505,11 +565,19 @@ def main() -> int:
 
     import tasks  # noqa: F401  -- register environments
     from data_gen.render import camera_rigs as RIG
+
+    resolution = None
+    if args.base_res or args.wrist_res or args.supersample != 1:
+        resolution = RIG.RigResolution(base=(args.base_res, args.base_res) if args.base_res else None,
+                                       wrist=(args.wrist_res, args.wrist_res) if args.wrist_res else None,
+                                       supersample=args.supersample)
+    resolution_args = ["--base-res", str(args.base_res), "--wrist-res", str(args.wrist_res),
+                       "--supersample", str(args.supersample)]
     from data_gen.recordings.dataset_layout import iter_dataset_roots
 
     if args.dataset is not None:  # worker mode
         result = render_dataset(args.dataset.resolve(), args.out_root.resolve(), args.episodes,
-                                args.determinism_frames)
+                                args.determinism_frames, resolution)
         if args.json_out:
             args.json_out.write_text(json.dumps(result, indent=1, ensure_ascii=False))
         return 0
@@ -527,7 +595,8 @@ def main() -> int:
         total_frames += info["total_frames"] if args.episodes <= 0 else 0
         print(f"{dataset.name:56s} {family:16s} {n:5d} {info['total_frames']:7d}  "
               f"{tuple(round(v, 3) for v in spec.eye_in_world_m)} -> {tuple(round(v, 3) for v in spec.target_in_world_m)}")
-    print(f"\n{len(datasets)} datasets, {total_frames} frames in total; rig {RIG.RIG_VERSION}; output {args.out_root}")
+    print(f"\n{len(datasets)} datasets, {total_frames} frames in total; rig {RIG.RIG_VERSION}; "
+          f"resolution {(resolution or RIG.DEFAULT_RESOLUTION).describe((256, 256), (256, 256))}; output {args.out_root}")
     if not args.apply:
         print("dry run; add --apply to render")
         return 0
@@ -538,7 +607,7 @@ def main() -> int:
         for dataset in datasets:
             try:
                 results.append(render_dataset(dataset.resolve(), args.out_root.resolve(), args.episodes,
-                                              args.determinism_frames))
+                                              args.determinism_frames, resolution))
             except Exception as exc:  # keep going; the summary names the failure
                 results.append({"dataset": dataset.name, "error": f"{type(exc).__name__}: {exc}"})
                 print(f"!! {dataset.name}: {type(exc).__name__}: {exc}", flush=True)
@@ -547,7 +616,7 @@ def main() -> int:
 
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futures = [pool.submit(_worker, d.resolve(), args.out_root.resolve(), args.episodes,
-                                   args.determinism_frames, args.timeout) for d in datasets]
+                                   args.determinism_frames, args.timeout, resolution_args) for d in datasets]
             for future in futures:
                 results.append(future.result())
                 r = results[-1]

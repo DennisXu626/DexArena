@@ -32,7 +32,7 @@ WHAT IT IS NOT
 from __future__ import annotations
 
 import math
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from utils.camera_configs import (
@@ -49,6 +49,45 @@ BASE_HEIGHT_M = 1.08
 BASE_TILT_DEG = 20.0  # optical axis from the downward table normal
 
 BASE_CAMERA_NAME = "base_camera"
+
+
+@dataclass(frozen=True)
+class RigResolution:
+    """Output size per camera and the supersampling factor.
+
+    A size of None keeps the rig default (the 256 x 256 the released videos use). With
+    ``supersample`` k > 1 every camera is rendered at k times its output size and the
+    renderer's frames are box-filtered down to the output size (k x k pixel averages),
+    which removes the aliasing of the point-sampled render. The output sizes are what
+    the video features declare.
+    """
+    base: tuple[int, int] | None = None   # (width, height)
+    wrist: tuple[int, int] | None = None
+    supersample: int = 1
+
+    def __post_init__(self):
+        if int(self.supersample) < 1:
+            raise ValueError(f"supersample must be >= 1, got {self.supersample}")
+
+    def output_size(self, camera: str, default: tuple[int, int]) -> tuple[int, int]:
+        size = self.base if camera == "base" else self.wrist
+        return (int(size[0]), int(size[1])) if size else (int(default[0]), int(default[1]))
+
+    def render_size(self, camera: str, default: tuple[int, int]) -> tuple[int, int]:
+        w, h = self.output_size(camera, default)
+        return (w * int(self.supersample), h * int(self.supersample))
+
+    def describe(self, base_default: tuple[int, int], wrist_default: tuple[int, int]) -> dict[str, Any]:
+        return {
+            "base": list(self.output_size("base", base_default)),
+            "wrist": list(self.output_size("wrist", wrist_default)),
+            "supersample": int(self.supersample),
+            "rendered": {"base": list(self.render_size("base", base_default)),
+                         "wrist": list(self.render_size("wrist", wrist_default))},
+        }
+
+
+DEFAULT_RESOLUTION = RigResolution()
 WRIST_LINKS: tuple[tuple[str, str], ...] = (("left", "left_hand_wrist"), ("right", "right_hand_wrist"))
 
 # Measured scene centroids (long task, reset over 5 seeds, x/y/z in metres); main's three
@@ -101,11 +140,12 @@ def base_camera_spec(family: str) -> BaseCameraConfig:
     return BaseCameraConfig(eye_in_world_m=derive_eye(target), target_in_world_m=target, name=BASE_CAMERA_NAME)
 
 
-def build_base_camera(family: str):
+def build_base_camera(family: str, resolution: RigResolution | None = None):
     spec = base_camera_spec(family)
+    width, height = (resolution or DEFAULT_RESOLUTION).render_size("base", (spec.width, spec.height))
     return build_dexarena_base_camera(
         eye=spec.eye_in_world_m, target=spec.target_in_world_m, up=spec.image_up_in_world,
-        width=spec.width, height=spec.height, fov_deg=spec.vertical_fov_deg,
+        width=width, height=height, fov_deg=spec.vertical_fov_deg,
         near=spec.near_m, far=spec.far_m, name=BASE_CAMERA_NAME,
     )
 
@@ -129,37 +169,41 @@ def wrist_mounts(agent) -> list[tuple[str, Any]]:
     return mounts
 
 
-def build_wrist_cameras(agent) -> list:
+def build_wrist_cameras(agent, resolution: RigResolution | None = None) -> list:
     cameras = []
     for name, link in wrist_mounts(agent):
         camera = build_dexarena_fixed_wrist_camera(mount=link)
+        camera.width, camera.height = (resolution or DEFAULT_RESOLUTION).render_size(
+            "wrist", (camera.width, camera.height))
         camera.uid = name
         cameras.append(camera)
     return cameras
 
 
-def rig_cameras(env_unwrapped, family: str) -> list:
-    return [build_base_camera(family)] + build_wrist_cameras(env_unwrapped.agent)
+def rig_cameras(env_unwrapped, family: str, resolution: RigResolution | None = None) -> list:
+    return [build_base_camera(family, resolution)] + build_wrist_cameras(env_unwrapped.agent, resolution)
 
 
 def rig_camera_names(env_unwrapped) -> list[str]:
     return [BASE_CAMERA_NAME] + [name for name, _link in wrist_mounts(env_unwrapped.agent)]
 
 
-def install_rig(env_cls, family: str) -> None:
+def install_rig(env_cls, family: str, resolution: RigResolution | None = None) -> None:
     """Make ``env_cls`` render the family rig as its human render cameras.
 
     Same lever as the camera installer used at record time: a class
     property, in this process only; the task module on disk is untouched.
     """
-    env_cls._default_human_render_camera_configs = property(lambda self: rig_cameras(self, family))
+    env_cls._default_human_render_camera_configs = property(lambda self: rig_cameras(self, family, resolution))
 
 
-def describe(family: str, env_unwrapped=None) -> dict[str, Any]:
+def describe(family: str, env_unwrapped=None, resolution: RigResolution | None = None) -> dict[str, Any]:
     """What went into the videos -- written to every video dataset's manifest."""
     spec = base_camera_spec(family)
+    wrist = DEXARENA_FIXED_WRIST_CAMERA_CONFIG
     out = {
         "rig_version": RIG_VERSION,
+        "resolution": (resolution or DEFAULT_RESOLUTION).describe((spec.width, spec.height), (wrist.width, wrist.height)),
         "base_rule": DEXARENA_FIXED_CAMERA_CONFIG_VERSION,
         "family": family,
         "base_camera": {"name": BASE_CAMERA_NAME, **asdict(spec),
