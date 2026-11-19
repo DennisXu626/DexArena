@@ -22,6 +22,10 @@ python -m data_gen.render.render_multiview_videos --apply --episodes 2 \
 
 # every dataset under the source root, three in parallel
 python -m data_gen.render.render_multiview_videos --apply --jobs 3
+
+# high-resolution tier: 1024x1024 per camera, rendered at 2048x2048 and box-filtered down
+python -m data_gen.render.render_multiview_videos --apply --only OfficeDeskTypeKeys-Sharpa-v1 \
+  --base-res 1024 --wrist-res 1024 --supersample 2 --out-root data/teleop_lerobot_100_video_hd
 ```
 
 - `--source-root DIR` (default `data/teleop_lerobot_100`): the state-only datasets to render.
@@ -31,6 +35,8 @@ python -m data_gen.render.render_multiview_videos --apply --jobs 3
 - `--determinism-frames N` (default 3): frames per episode re-rendered a second time for the pixel-identity check.
 - `--jobs N` (default 1): datasets rendered in parallel, one subprocess each.
 - `--timeout S` (default 21600): time limit per dataset subprocess.
+- `--base-res N`, `--wrist-res N` (default 0 = the rig's 256x256): video size per camera, square.
+- `--supersample K` (default 1): render every camera at K times the video size and average each K x K block; this removes the aliasing of the point-sampled render. The tier (video size, rendered size, K) is written under `rig.resolution` in `meta/video_manifest.json` and the certificate.
 - `--apply`: render and export; without it the run only prints the plan.
 
 Output: `data/teleop_lerobot_100_video/<hand>/<env id>/` with the cameras as `observation.images.<camera>` video features (AV1), the source's state columns, a new certificate, and `meta/video_manifest.json` with the per-dataset counts: rendered frames vs recorded states, re-rendered frames that are pixel-identical, and the decoded-video PSNR check (25 dB floor; the certificate records the minimum per camera).
