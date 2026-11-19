@@ -18,6 +18,7 @@
 <p align="center">
   <a href="#news">📰 News</a> &nbsp;·&nbsp;
   <a href="#overview">✨ Overview</a> &nbsp;·&nbsp;
+  <a href="#roadmap">🗺️ Roadmap</a> &nbsp;·&nbsp;
   <a href="#resources">🔗 Resources</a> &nbsp;·&nbsp;
   <a href="#documentation">📚 Documentation</a> &nbsp;·&nbsp;
   <a href="#citation">📝 Citation</a>
@@ -39,7 +40,10 @@ baseline training and evaluation code.
 
 ## 📰 News
 
-- **2026-11-06** — Updated [baseline training and evaluation guides](train/TRAIN_EVAL.md), including released ACT / Diffusion Policy checkpoints and the [GR00T](docs/GROOT_DEXARENA.md) and [π0.5](docs/PI05.md) workflows. See the [code update](https://github.com/Qhf7/DexArena/commit/c284d4d61d645bfff7366e21c33a08f548f69506).
+- **2026-11-19** — Camera resolution update: the multi-view renderer gained resolution tiers (see [data_gen/render](data_gen/render/README.md)).
+- **2026-11-17** — GPU backend physics parity: gravity on parked bodies ([PR #4](https://github.com/SIPAIR-Elastic/DexArena/pull/4)) and friction on articulated objects ([PR #6](https://github.com/SIPAIR-Elastic/DexArena/pull/6)) now behave as on the CPU backend.
+- **2026-11-06** — Updated [baseline training and evaluation guides](train/TRAIN_EVAL.md), including released ACT / Diffusion Policy checkpoints and the [GR00T](docs/GROOT_DEXARENA.md) and [π0.5](docs/PI05.md) workflows. See [PR #2](https://github.com/SIPAIR-Elastic/DexArena/pull/2).
+- **2026-11-06** — Public code release: the 40 tasks with four end effectors, recording and replay tools, and the training and evaluation code. See [PR #1](https://github.com/SIPAIR-Elastic/DexArena/pull/1).
 - **2026-11-03** — [Paper v2](https://arxiv.org/abs/2611.02629v2) is available on arXiv.
 - **2026-11-02** — Introduced DexArena in the [arXiv preprint](https://arxiv.org/abs/2611.02629v1).
 
@@ -61,6 +65,21 @@ baseline training and evaluation code.
 Explore the [task catalog](https://sipair-elastic.github.io/DexArena-website/tasks/)
 or inspect the [task IDs and horizons](docs/GETTING_STARTED.md#tasks).
 
+<a id="roadmap"></a>
+
+## 🗺️ Roadmap
+
+Completed:
+
+- [x] Public code release: 40 tasks, four end effectors, recording, replay and rendering tools, six baselines.
+- [x] High-resolution render tier: 1024×1024 per camera with 2× supersampling in the multi-view renderer.
+
+In progress and planned:
+
+- [ ] **Data release** — demonstrations, multi-view videos and baseline checkpoints on Hugging Face with per-dataset integrity certificates and a dataset card.
+- [ ] **Richer variation** — object instances, appearance, geometry, layouts, wider initial arm and object poses, and physical properties as controlled evaluation axes with seen/unseen splits.
+- [ ] **Multi-embodiment demonstrations** — Wuji, XHand and gripper data alongside the Sharpa release.
+
 <a id="resources"></a>
 
 ## 🔗 Resources
@@ -76,10 +95,11 @@ or inspect the [task IDs and horizons](docs/GETTING_STARTED.md#tasks).
 | 📝 [BibTeX](docs/citation.bib) | Downloadable citation for research use |
 
 > [!NOTE]
-> **Data access:** request access once on the Hugging Face dataset page
-> (approval is automatic), then run `hf auth login` before downloading.
-> The leaderboard displays the paper's baseline results; community submissions
-> are not currently open.
+> **Data access:** dataset access is temporarily paused while the data
+> release is prepared (see the [roadmap](#roadmap)). Once it reopens,
+> request access on the Hugging Face dataset page and run `hf auth login`
+> before downloading. The leaderboard displays the paper's baseline results;
+> community submissions are not currently open.
 
 <a id="documentation"></a>
 
